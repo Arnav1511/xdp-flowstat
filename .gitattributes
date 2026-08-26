@@ -1,0 +1,12 @@
+# vmlinux.h is generated from the kernel's BTF by bpftool. It is committed so a
+# fresh clone builds without needing BTF on the build host, but it is 3.4 MB of
+# machine-generated C -- without this it accounts for 99.9% of the repository's
+# reported language stats and swamps every diff.
+bpf/vmlinux.h linguist-generated=true
+
+# bpf2go output: Go bindings that go:embed the compiled BPF object.
+cmd/flowstat/flowstat_bpfel.go linguist-generated=true
+cmd/flowstat/flowstat_bpfel.o  binary
+
+# Keep shell scripts LF regardless of platform -- they run as root.
+*.sh text eol=lf
