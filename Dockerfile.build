@@ -1,0 +1,8 @@
+# Build-only image: Go + clang/LLVM + libbpf headers.
+# Lets us compile the eBPF object without installing a toolchain on the host.
+FROM golang:1.26-trixie
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        clang-19 llvm-19 libbpf-dev \
+    && ln -sf /usr/bin/clang-19 /usr/bin/clang \
+    && ln -sf /usr/bin/llvm-strip-19 /usr/bin/llvm-strip \
+    && rm -rf /var/lib/apt/lists/*

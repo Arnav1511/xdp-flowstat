@@ -1,0 +1,5 @@
+# build output
+bin/
+
+# deliberately-broken teaching artifacts; regenerate with clang
+bpf/testdata/*.o
