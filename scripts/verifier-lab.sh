@@ -21,7 +21,7 @@ run() {
 		echo "UNEXPECTED: failed to COMPILE"; cat "$TMP/cc.log"; return
 	fi
 	echo "compiled OK -- so this is not a compile-time error"
-	bpftool prog load "$TMP/v.o" /sys/fs/bpf/vlab 2>&1 | grep -vE "^libbpf: (map|prog) '" | head -20
+	bpftool prog load "$TMP/v.o" /sys/fs/bpf/vlab 2>&1 | grep -vE "^libbpf: (map|prog) '" | head -40
 	rm -f /sys/fs/bpf/vlab 2>/dev/null
 }
 
