@@ -2,6 +2,12 @@
 
 BPFTOOL ?= bpftool
 
+# bpf2go needs llvm-strip to remove DWARF from the compiled object. Distros
+# often ship it only as llvm-strip-NN with no unsuffixed symlink, so find the
+# highest version available rather than requiring update-alternatives.
+BPF2GO_STRIP ?= $(shell command -v llvm-strip 2>/dev/null || ls -1 /usr/bin/llvm-strip-* 2>/dev/null | sort -V | tail -1)
+export BPF2GO_STRIP
+
 # Regenerate bpf/vmlinux.h from the running kernel's BTF.
 vmlinux:
 	$(BPFTOOL) btf dump file /sys/kernel/btf/vmlinux format c > bpf/vmlinux.h

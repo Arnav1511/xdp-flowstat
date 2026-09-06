@@ -16,7 +16,8 @@ import (
 //
 // Used for safe lookups in a Collection or CollectionSpec.
 const (
-	flowstatProgXdpPassAll = "xdp_pass_all"
+	flowstatMapProtoCount   = "proto_count"
+	flowstatProgXdpFlowstat = "xdp_flowstat"
 )
 
 // loadFlowstat returns the embedded CollectionSpec for flowstat.
@@ -61,13 +62,14 @@ type flowstatSpecs struct {
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type flowstatProgramSpecs struct {
-	XdpPassAll *ebpf.ProgramSpec `ebpf:"xdp_pass_all"`
+	XdpFlowstat *ebpf.ProgramSpec `ebpf:"xdp_flowstat"`
 }
 
 // flowstatMapSpecs contains maps before they are loaded into the kernel.
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type flowstatMapSpecs struct {
+	ProtoCount *ebpf.MapSpec `ebpf:"proto_count"`
 }
 
 // flowstatVariableSpecs contains global variables before they are loaded into the kernel.
@@ -96,10 +98,13 @@ func (o *flowstatObjects) Close() error {
 //
 // It can be passed to loadFlowstatObjects or ebpf.CollectionSpec.LoadAndAssign.
 type flowstatMaps struct {
+	ProtoCount *ebpf.Map `ebpf:"proto_count"`
 }
 
 func (m *flowstatMaps) Close() error {
-	return _FlowstatClose()
+	return _FlowstatClose(
+		m.ProtoCount,
+	)
 }
 
 // flowstatVariables contains all global variables after they have been loaded into the kernel.
@@ -112,12 +117,12 @@ type flowstatVariables struct {
 //
 // It can be passed to loadFlowstatObjects or ebpf.CollectionSpec.LoadAndAssign.
 type flowstatPrograms struct {
-	XdpPassAll *ebpf.Program `ebpf:"xdp_pass_all"`
+	XdpFlowstat *ebpf.Program `ebpf:"xdp_flowstat"`
 }
 
 func (p *flowstatPrograms) Close() error {
 	return _FlowstatClose(
-		p.XdpPassAll,
+		p.XdpFlowstat,
 	)
 }
 

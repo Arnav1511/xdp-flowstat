@@ -1,7 +1,8 @@
-// Command flowstat loads a minimal XDP program, attaches it to an interface,
-// and detaches cleanly on SIGINT/SIGTERM.
+// Command flowstat loads an XDP program, attaches it to an interface, counts
+// ingress packets by IP protocol, and detaches cleanly on SIGINT/SIGTERM.
 //
-// Stage 2: the program passes every packet. No maps, no counters, no metrics.
+// Stage 3: per-protocol counters in a per-CPU array, printed every 2s.
+// No Prometheus yet.
 package main
 
 import (
@@ -9,12 +10,14 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"fmt"
 	"log"
 	"net"
 	"os"
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
@@ -100,7 +103,7 @@ func main() {
 	defer objs.Close()
 
 	l, err := link.AttachXDP(link.XDPOptions{
-		Program:   objs.XdpPassAll,
+		Program:   objs.XdpFlowstat,
 		Interface: nic.Index,
 		Flags:     flags,
 	})
@@ -109,13 +112,62 @@ func main() {
 	}
 	defer l.Close() // detaches; also happens if the process dies
 
-	log.Printf("attached xdp_pass_all to %s (ifindex %d) in %s mode", *iface, nic.Index, *mode)
+	log.Printf("attached xdp_flowstat to %s (ifindex %d) in %s mode", *iface, nic.Index, *mode)
 	log.Printf("inspect with: sudo bpftool prog show   |   ip link show %s", *iface)
 	log.Printf("Ctrl-C to detach")
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	<-ctx.Done()
 
-	log.Printf("signal received, detaching from %s", *iface)
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			log.Printf("signal received, detaching from %s", *iface)
+			return // runs the deferred l.Close() and objs.Close()
+
+		case <-ticker.C:
+			totals, err := readCounters(objs.ProtoCount)
+			if err != nil {
+				log.Printf("read counters: %v", err)
+				continue
+			}
+			fmt.Printf("tcp=%-8d udp=%-8d icmp=%-8d other=%-8d\n",
+				totals[slotTCP], totals[slotUDP], totals[slotICMP], totals[slotOther])
+		}
+	}
+}
+
+// Slot indices, matching the #defines in bpf/xdp_flowstat.c.
+const (
+	slotTCP = iota
+	slotUDP
+	slotICMP
+	slotOther
+	slotMax
+)
+
+// readCounters reads every slot of the per-CPU array and sums each one across
+// all CPUs.
+//
+// For a BPF_MAP_TYPE_PERCPU_ARRAY the kernel returns one value per possible
+// CPU, so the destination must be a slice: cilium/ebpf sizes it from
+// ebpf.MustPossibleCPU(). Summing here is why the kernel side needs no atomic
+// -- each CPU writes only its own copy.
+func readCounters(m *ebpf.Map) ([slotMax]uint64, error) {
+	var totals [slotMax]uint64
+
+	for slot := uint32(0); slot < slotMax; slot++ {
+		var perCPU []uint64
+		if err := m.Lookup(&slot, &perCPU); err != nil {
+			return totals, fmt.Errorf("lookup slot %d: %w", slot, err)
+		}
+		for _, v := range perCPU {
+			totals[slot] += v
+		}
+	}
+
+	return totals, nil
 }
