@@ -1,8 +1,8 @@
 // Command flowstat loads an XDP program, attaches it to an interface, counts
 // ingress packets by IP protocol, and detaches cleanly on SIGINT/SIGTERM.
 //
-// Stage 3: per-protocol counters in a per-CPU array, printed every 2s.
-// No Prometheus yet.
+// Stage 4: per-protocol counters in a per-CPU array, exported as Prometheus
+// metrics on /metrics and also printed every 2s.
 package main
 
 import (
@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -22,6 +23,9 @@ import (
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
 	"github.com/cilium/ebpf/rlimit"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/collectors"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 // bpf2go compiles bpf/xdp_flowstat.c with clang and generates Go bindings that
@@ -53,6 +57,7 @@ func main() {
 	iface := flag.String("iface", "", "interface to attach XDP to (required)")
 	mode := flag.String("mode", "native", "XDP attach mode: native | generic")
 	force := flag.Bool("force", false, "allow attaching to the default-route interface (DANGEROUS)")
+	addr := flag.String("metrics-addr", ":2112", "listen address for the Prometheus /metrics endpoint")
 	flag.Parse()
 
 	if *iface == "" {
@@ -119,6 +124,17 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	srv := startMetricsServer(*addr, objs.ProtoCount)
+	defer func() {
+		// Give in-flight scrapes a moment to finish rather than cutting them off.
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := srv.Shutdown(shutdownCtx); err != nil {
+			log.Printf("metrics server shutdown: %v", err)
+		}
+	}()
+	log.Printf("serving metrics on http://localhost%s/metrics", *addr)
+
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 
@@ -170,4 +186,38 @@ func readCounters(m *ebpf.Map) ([slotMax]uint64, error) {
 	}
 
 	return totals, nil
+}
+
+// startMetricsServer registers the collector on its own registry and serves
+// /metrics in the background.
+//
+// A private registry rather than prometheus.DefaultRegisterer: nothing is
+// exported unless this function asks for it, so a dependency cannot silently
+// add metrics to this binary's output.
+func startMetricsServer(addr string, m *ebpf.Map) *http.Server {
+	reg := prometheus.NewRegistry()
+	reg.MustRegister(
+		newCollector(mapSource{m: m}),
+		collectors.NewGoCollector(),
+		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
+	)
+
+	mux := http.NewServeMux()
+	mux.Handle("/metrics", promhttp.HandlerFor(reg, promhttp.HandlerOpts{
+		ErrorHandling: promhttp.HTTPErrorOnError,
+	}))
+
+	srv := &http.Server{
+		Addr:              addr,
+		Handler:           mux,
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+
+	go func() {
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Printf("metrics server: %v", err)
+		}
+	}()
+
+	return srv
 }

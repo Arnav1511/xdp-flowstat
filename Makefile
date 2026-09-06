@@ -1,4 +1,4 @@
-.PHONY: vmlinux generate build clean up down
+.PHONY: vmlinux generate build test clean up down
 
 BPFTOOL ?= bpftool
 
@@ -19,6 +19,9 @@ generate:
 
 build: generate
 	go build -o bin/flowstat ./cmd/flowstat
+
+test:
+	go test ./...
 
 up:
 	sudo ./scripts/veth-up.sh

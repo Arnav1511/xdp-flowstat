@@ -3,15 +3,44 @@
 An XDP program that counts packets by protocol at the NIC driver layer, exposes
 the counters via an eBPF map, and serves them as Prometheus metrics.
 
-**Status: Stage 2 — minimal XDP program attaching and detaching cleanly.**
-No counting, no maps, no metrics yet.
+**Status: Stage 4 — per-protocol counters exported as Prometheus metrics.**
 
 ## What works today
 
-- `bpf/xdp_flowstat.c` — returns `XDP_PASS` for every packet. Two instructions.
+- `bpf/xdp_flowstat.c` — parses the ethernet and IPv4 headers and counts
+  ingress packets into a `BPF_MAP_TYPE_PERCPU_ARRAY` (tcp / udp / icmp /
+  other). Every path returns `XDP_PASS`.
 - `cmd/flowstat` — a [cilium/ebpf](https://github.com/cilium/ebpf) loader that
-  attaches the program, holds it, and detaches on SIGINT/SIGTERM.
-- `scripts/` — an isolated veth test harness.
+  attaches the program, serves `/metrics`, and detaches on SIGINT/SIGTERM.
+- `scripts/` — an isolated veth test harness, plus a verifier lab.
+
+## Metrics
+
+```
+xdp_flowstat_packets_total{protocol="tcp"}   2
+xdp_flowstat_packets_total{protocol="udp"}   0
+xdp_flowstat_packets_total{protocol="icmp"}  15
+xdp_flowstat_packets_total{protocol="other"} 9
+```
+
+Served on `-metrics-addr` (default `:2112`). The map is read inside
+`Collect()`, i.e. on scrape, rather than copied into a gauge by a background
+ticker: no scrape sees data staler than itself, and no work happens when
+nobody is asking.
+
+These are `CounterValue`, not gauges. They only increase, and Prometheus needs
+to know that for `rate()` to handle a counter reset (process restart) correctly.
+
+Cardinality is fixed at four series. That is deliberate — a per-source-IP
+variant would need an LRU hash and a top-N, not a Prometheus label per address.
+
+### Known gaps
+
+| Gap | Effect |
+|---|---|
+| IPv6 not parsed | all `0x86DD` frames count as `other` |
+| VLAN tags not parsed | an `0x8100` frame hides its IPv4 payload, counts as `other` |
+| `SLOT_MAX` defined in both C and Go | can drift silently if a slot is added |
 
 ## Requirements
 
@@ -30,7 +59,8 @@ object via `go:embed`, so `go build` works without clang installed.
 
 ```bash
 make build              # go generate (clang) + go build
-make generate-docker    # same, in a container, if you have no host clang
+make test               # unit tests for the collector (no root, no kernel)
+make generate-docker    # same as build, in a container, if you have no host clang
 ```
 
 ## Test harness
@@ -56,6 +86,7 @@ make down               # tear it all down
 
 ```bash
 sudo ./bin/flowstat -iface veth-fs0 -mode native
+curl -s localhost:2112/metrics | grep xdp_flowstat
 ```
 
 The loader **refuses to attach to the interface carrying the default route**
@@ -107,8 +138,18 @@ size=2`. It tracks a *type* and a provable *range* per register. Fresh from
 which fails. Comparing against `data_end` is what widens the range — the bounds
 check is a proof for the static analyser, not a runtime guard.
 
+### Reproducing the rejections
+
+`scripts/verifier-lab.sh` deletes each check in turn, compiles the result, and
+tries to load it. Every variant compiles; every variant is rejected.
+
+```bash
+sudo ./scripts/verifier-lab.sh
+```
+
 ## Roadmap
 
 - **Stage 2** ✅ attach/detach cleanly
-- **Stage 3** per-protocol counters in a `BPF_MAP_TYPE_PERCPU_ARRAY`
-- **Stage 4** Prometheus exporter
+- **Stage 3** ✅ per-protocol counters in a `BPF_MAP_TYPE_PERCPU_ARRAY`
+- **Stage 4** ✅ Prometheus exporter
+- **Stage 5** IPv6 and VLAN parsing
