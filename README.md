@@ -3,13 +3,14 @@
 An XDP program that counts packets by protocol at the NIC driver layer, exposes
 the counters via an eBPF map, and serves them as Prometheus metrics.
 
-**Status: Stage 4 — per-protocol counters exported as Prometheus metrics.**
+**Status: Stage 5 — VLAN and IPv6 parsing, counters by family and protocol.**
 
 ## What works today
 
-- `bpf/xdp_flowstat.c` — parses the ethernet and IPv4 headers and counts
-  ingress packets into a `BPF_MAP_TYPE_PERCPU_ARRAY` (tcp / udp / icmp /
-  other). Every path returns `XDP_PASS`.
+- `bpf/xdp_flowstat.c` — parses the ethernet header, up to two VLAN tags,
+  then IPv4 or IPv6 (walking a bounded chain of IPv6 extension headers), and
+  counts into a 9-slot `BPF_MAP_TYPE_PERCPU_ARRAY`. Every path returns
+  `XDP_PASS`.
 - `cmd/flowstat` — a [cilium/ebpf](https://github.com/cilium/ebpf) loader that
   attaches the program, serves `/metrics`, and detaches on SIGINT/SIGTERM.
 - `scripts/` — an isolated veth test harness, plus a verifier lab.
@@ -17,10 +18,15 @@ the counters via an eBPF map, and serves them as Prometheus metrics.
 ## Metrics
 
 ```
-xdp_flowstat_packets_total{protocol="tcp"}   2
-xdp_flowstat_packets_total{protocol="udp"}   0
-xdp_flowstat_packets_total{protocol="icmp"}  15
-xdp_flowstat_packets_total{protocol="other"} 9
+xdp_flowstat_packets_total{family="ipv4",protocol="tcp"}    2
+xdp_flowstat_packets_total{family="ipv4",protocol="udp"}    0
+xdp_flowstat_packets_total{family="ipv4",protocol="icmp"}  15
+xdp_flowstat_packets_total{family="ipv4",protocol="other"}  0
+xdp_flowstat_packets_total{family="ipv6",protocol="tcp"}    0
+xdp_flowstat_packets_total{family="ipv6",protocol="udp"}    0
+xdp_flowstat_packets_total{family="ipv6",protocol="icmp"}   0
+xdp_flowstat_packets_total{family="ipv6",protocol="other"}  0
+xdp_flowstat_packets_total{family="non_ip",protocol="other"} 9
 ```
 
 Served on `-metrics-addr` (default `:2112`). The map is read inside
@@ -31,16 +37,28 @@ nobody is asking.
 These are `CounterValue`, not gauges. They only increase, and Prometheus needs
 to know that for `rate()` to handle a counter reset (process restart) correctly.
 
-Cardinality is fixed at four series. That is deliberate — a per-source-IP
+Cardinality is fixed at nine series. That is deliberate — a per-source-address
 variant would need an LRU hash and a top-N, not a Prometheus label per address.
 
-### Known gaps
+### Parsing limits
 
-| Gap | Effect |
+Deliberate bounds, not oversights. The verifier requires every loop to be
+bounded, so "how deep do we walk" is a design decision that has to be made
+explicitly.
+
+| Limit | Effect |
 |---|---|
-| IPv6 not parsed | all `0x86DD` frames count as `other` |
-| VLAN tags not parsed | an `0x8100` frame hides its IPv4 payload, counts as `other` |
+| `MAX_VLAN_DEPTH = 2` | a frame with three or more tags counts as `non_ip` |
+| `MAX_EXT_HDRS = 4` | a longer IPv6 header chain counts as `ipv6`/`other` |
+| ESP / AH not decoded | encrypted payloads count as `ipv6`/`other`; the transport header is not visible |
 | `SLOT_MAX` defined in both C and Go | can drift silently if a slot is added |
+
+### Complexity cost
+
+Adding VLAN and IPv6 parsing took the program from **57 to 196 instructions**.
+The verifier explores every reachable path, so its `insn_processed` count grows
+faster than the static size. `scripts/verifier-lab.sh` prints the figure for
+the current program.
 
 ## Requirements
 
@@ -152,4 +170,4 @@ sudo ./scripts/verifier-lab.sh
 - **Stage 2** ✅ attach/detach cleanly
 - **Stage 3** ✅ per-protocol counters in a `BPF_MAP_TYPE_PERCPU_ARRAY`
 - **Stage 4** ✅ Prometheus exporter
-- **Stage 5** IPv6 and VLAN parsing
+- **Stage 5** ✅ IPv6 and VLAN parsing

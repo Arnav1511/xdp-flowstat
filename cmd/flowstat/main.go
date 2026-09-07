@@ -1,8 +1,8 @@
 // Command flowstat loads an XDP program, attaches it to an interface, counts
 // ingress packets by IP protocol, and detaches cleanly on SIGINT/SIGTERM.
 //
-// Stage 4: per-protocol counters in a per-CPU array, exported as Prometheus
-// metrics on /metrics and also printed every 2s.
+// Stage 5: counters by address family and IP protocol, exported as Prometheus
+// metrics on /metrics and also printed every 2s. Handles VLAN and IPv6.
 package main
 
 import (
@@ -150,18 +150,25 @@ func main() {
 				log.Printf("read counters: %v", err)
 				continue
 			}
-			fmt.Printf("tcp=%-8d udp=%-8d icmp=%-8d other=%-8d\n",
-				totals[slotTCP], totals[slotUDP], totals[slotICMP], totals[slotOther])
+			fmt.Printf("v4[tcp=%d udp=%d icmp=%d other=%d]  v6[tcp=%d udp=%d icmp=%d other=%d]  non-ip=%d\n",
+				totals[slotV4TCP], totals[slotV4UDP], totals[slotV4ICMP], totals[slotV4Other],
+				totals[slotV6TCP], totals[slotV6UDP], totals[slotV6ICMP], totals[slotV6Other],
+				totals[slotNonIP])
 		}
 	}
 }
 
-// Slot indices, matching the #defines in bpf/xdp_flowstat.c.
+// Slot indices, matching the SLOT_* defines in bpf/xdp_flowstat.c.
 const (
-	slotTCP = iota
-	slotUDP
-	slotICMP
-	slotOther
+	slotV4TCP = iota
+	slotV4UDP
+	slotV4ICMP
+	slotV4Other
+	slotV6TCP
+	slotV6UDP
+	slotV6ICMP
+	slotV6Other
+	slotNonIP
 	slotMax
 )
 

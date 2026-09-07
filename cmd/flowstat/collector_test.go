@@ -17,9 +17,24 @@ type fakeSource struct {
 
 func (f fakeSource) counters() ([slotMax]uint64, error) { return f.vals, f.err }
 
-const header = `# HELP xdp_flowstat_packets_total Ingress packets observed by the XDP program, by IP protocol.
+const header = `# HELP xdp_flowstat_packets_total Ingress packets observed by the XDP program, by address family and IP protocol.
 # TYPE xdp_flowstat_packets_total counter
 `
+
+// expose renders the expected exposition. Prometheus sorts by label values,
+// so the order is (family, protocol) ascending: ipv4, ipv6, non_ip.
+func expose(v4tcp, v4udp, v4icmp, v4other, v6tcp, v6udp, v6icmp, v6other, nonip string) string {
+	return header +
+		`xdp_flowstat_packets_total{family="ipv4",protocol="icmp"} ` + v4icmp + "\n" +
+		`xdp_flowstat_packets_total{family="ipv4",protocol="other"} ` + v4other + "\n" +
+		`xdp_flowstat_packets_total{family="ipv4",protocol="tcp"} ` + v4tcp + "\n" +
+		`xdp_flowstat_packets_total{family="ipv4",protocol="udp"} ` + v4udp + "\n" +
+		`xdp_flowstat_packets_total{family="ipv6",protocol="icmp"} ` + v6icmp + "\n" +
+		`xdp_flowstat_packets_total{family="ipv6",protocol="other"} ` + v6other + "\n" +
+		`xdp_flowstat_packets_total{family="ipv6",protocol="tcp"} ` + v6tcp + "\n" +
+		`xdp_flowstat_packets_total{family="ipv6",protocol="udp"} ` + v6udp + "\n" +
+		`xdp_flowstat_packets_total{family="non_ip",protocol="other"} ` + nonip + "\n"
+}
 
 func TestCollectorExposition(t *testing.T) {
 	tests := []struct {
@@ -30,31 +45,30 @@ func TestCollectorExposition(t *testing.T) {
 		{
 			name: "all zero",
 			src:  fakeSource{},
-			want: header + `xdp_flowstat_packets_total{protocol="icmp"} 0
-xdp_flowstat_packets_total{protocol="other"} 0
-xdp_flowstat_packets_total{protocol="tcp"} 0
-xdp_flowstat_packets_total{protocol="udp"} 0
-`,
+			want: expose("0", "0", "0", "0", "0", "0", "0", "0", "0"),
 		},
 		{
-			name: "mixed",
-			src:  fakeSource{vals: [slotMax]uint64{slotTCP: 2, slotUDP: 7, slotICMP: 15, slotOther: 9}},
-			want: header + `xdp_flowstat_packets_total{protocol="icmp"} 15
-xdp_flowstat_packets_total{protocol="other"} 9
-xdp_flowstat_packets_total{protocol="tcp"} 2
-xdp_flowstat_packets_total{protocol="udp"} 7
-`,
+			name: "ipv4 and non-ip only, as on a quiet veth",
+			src: fakeSource{vals: [slotMax]uint64{
+				slotV4ICMP: 5, slotNonIP: 2,
+			}},
+			want: expose("0", "0", "5", "0", "0", "0", "0", "0", "2"),
+		},
+		{
+			name: "both families populated",
+			src: fakeSource{vals: [slotMax]uint64{
+				slotV4TCP: 2, slotV4UDP: 7, slotV4ICMP: 15, slotV4Other: 1,
+				slotV6TCP: 3, slotV6UDP: 4, slotV6ICMP: 9, slotV6Other: 6,
+				slotNonIP: 11,
+			}},
+			want: expose("2", "7", "15", "1", "3", "4", "9", "6", "11"),
 		},
 		{
 			// Per-CPU sums can exceed 2^53, where float64 stops being exact.
 			// Prometheus values are float64, so this is a real ceiling.
 			name: "large values survive the float64 conversion",
-			src:  fakeSource{vals: [slotMax]uint64{slotTCP: 1 << 52}},
-			want: header + `xdp_flowstat_packets_total{protocol="icmp"} 0
-xdp_flowstat_packets_total{protocol="other"} 0
-xdp_flowstat_packets_total{protocol="tcp"} 4.503599627370496e+15
-xdp_flowstat_packets_total{protocol="udp"} 0
-`,
+			src:  fakeSource{vals: [slotMax]uint64{slotV6TCP: 1 << 52}},
+			want: expose("0", "0", "0", "0", "4.503599627370496e+15", "0", "0", "0", "0"),
 		},
 	}
 
@@ -81,12 +95,18 @@ func TestCollectorReportsReadError(t *testing.T) {
 	}
 }
 
-// Guards against slotNames drifting out of sync with the SLOT_* defines in
+// Guards against slotLabels drifting out of sync with the SLOT_* defines in
 // bpf/xdp_flowstat.c if a slot is added.
-func TestSlotNamesComplete(t *testing.T) {
-	for i, name := range slotNames {
-		if name == "" {
-			t.Errorf("slot %d has no label name", i)
+func TestSlotLabelsComplete(t *testing.T) {
+	seen := map[string]bool{}
+	for i, l := range slotLabels {
+		if l.family == "" || l.protocol == "" {
+			t.Errorf("slot %d has an empty label: %+v", i, l)
 		}
+		key := l.family + "/" + l.protocol
+		if seen[key] {
+			t.Errorf("slot %d duplicates label pair %s", i, key)
+		}
+		seen[key] = true
 	}
 }

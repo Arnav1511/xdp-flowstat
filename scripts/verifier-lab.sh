@@ -2,6 +2,9 @@
 # Delete each safety check from bpf/xdp_flowstat.c in turn, compile, and try to
 # load. Every variant compiles; every variant is rejected by the verifier.
 #
+# Line numbers are derived from the source at runtime rather than hardcoded,
+# so this does not rot when the program changes.
+#
 # Needs root only for the load step (kernel.unprivileged_bpf_disabled=2).
 #   sudo ./scripts/verifier-lab.sh
 set -uo pipefail
@@ -11,9 +14,21 @@ SRC=bpf/xdp_flowstat.c
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 
-# name:lines-to-delete (sed ranges)
+# Find the line holding a check, and return "N,N+1" -- the check plus the
+# return statement beneath it.
+lines_for() {
+	local n
+	n=$(grep -n -- "$1" "$SRC" | head -1 | cut -d: -f1)
+	if [ -z "$n" ]; then
+		echo "PATTERN NOT FOUND: $1" >&2
+		return 1
+	fi
+	echo "${n},$((n + 1))"
+}
+
 run() {
-	local name="$1" del="$2"
+	local name="$1" pattern="$2" del
+	del=$(lines_for "$pattern") || return
 	printf '\n══════ %s (deleting lines %s) ══════\n' "$name" "$del"
 	sed "${del}d" "$SRC" > "$TMP/v.c"
 	if ! clang -target bpf -O2 -g -Wall -Wno-missing-declarations \
@@ -21,15 +36,23 @@ run() {
 		echo "UNEXPECTED: failed to COMPILE"; cat "$TMP/cc.log"; return
 	fi
 	echo "compiled OK -- so this is not a compile-time error"
-	bpftool prog load "$TMP/v.o" /sys/fs/bpf/vlab 2>&1 | grep -vE "^libbpf: (map|prog) '" | head -40
+	bpftool prog load "$TMP/v.o" /sys/fs/bpf/vlab 2>&1 \
+		| grep -vE "^libbpf: (map|prog) '" | head -40
 	rm -f /sys/fs/bpf/vlab 2>/dev/null
 }
 
-run "BOUNDS CHECK 1 (ethernet header)" "61,62"
-run "BOUNDS CHECK 2 (IPv4 header)"     "75,76"
-run "NULL CHECK (map lookup)"          "44,45"
+run "NULL CHECK (map lookup)"        'if (!val)'
+run "BOUNDS 1: ethernet header"      '(eth + 1) > data_end'
+run "BOUNDS 2: VLAN header"          '(vh + 1) > data_end'
+run "BOUNDS 3: IPv4 header"          '(ip + 1) > data_end'
+run "BOUNDS 4: IPv6 header"          '(ip6 + 1) > data_end'
+run "BOUNDS 5: IPv6 option header"   '(opt + 1) > data_end'
+run "BOUNDS 6: IPv6 fragment header" '(fh + 1) > data_end'
 
 printf '\n══════ baseline: unmodified program ══════\n'
 clang -target bpf -O2 -g -Wall -Wno-missing-declarations -I bpf -c "$SRC" -o "$TMP/ok.o"
-bpftool prog load "$TMP/ok.o" /sys/fs/bpf/vlab 2>&1 | head -5 && echo "loaded OK"
+# -d prints the verifier log even on success, so the complexity cost is visible.
+bpftool -d prog load "$TMP/ok.o" /sys/fs/bpf/vlab 2>&1 | grep -E "^processed" \
+	|| echo "(loaded, but no 'processed' line -- try without -d)"
 rm -f /sys/fs/bpf/vlab 2>/dev/null
+echo "loaded OK"

@@ -7,13 +7,21 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
-// slotNames maps a slot index to its Prometheus label value. Index order must
-// match the SLOT_* defines in bpf/xdp_flowstat.c.
-var slotNames = [slotMax]string{
-	slotTCP:   "tcp",
-	slotUDP:   "udp",
-	slotICMP:  "icmp",
-	slotOther: "other",
+// slotLabels maps a slot index to its Prometheus label values. Index order
+// must match the SLOT_* defines in bpf/xdp_flowstat.c.
+//
+// Cardinality is fixed at 9 series. That is deliberate: a per-source-address
+// variant would need an LRU hash and a top-N, not a label per address.
+var slotLabels = [slotMax]struct{ family, protocol string }{
+	slotV4TCP:   {"ipv4", "tcp"},
+	slotV4UDP:   {"ipv4", "udp"},
+	slotV4ICMP:  {"ipv4", "icmp"},
+	slotV4Other: {"ipv4", "other"},
+	slotV6TCP:   {"ipv6", "tcp"},
+	slotV6UDP:   {"ipv6", "udp"},
+	slotV6ICMP:  {"ipv6", "icmp"},
+	slotV6Other: {"ipv6", "other"},
+	slotNonIP:   {"non_ip", "other"},
 }
 
 // counterSource is the collector's view of the BPF map. An interface rather
@@ -42,8 +50,8 @@ func newCollector(src counterSource) *collector {
 		src: src,
 		desc: prometheus.NewDesc(
 			"xdp_flowstat_packets_total",
-			"Ingress packets observed by the XDP program, by IP protocol.",
-			[]string{"protocol"},
+			"Ingress packets observed by the XDP program, by address family and IP protocol.",
+			[]string{"family", "protocol"},
 			nil,
 		),
 	}
@@ -62,11 +70,11 @@ func (c *collector) Collect(ch chan<- prometheus.Metric) {
 		return
 	}
 
-	for slot, name := range slotNames {
+	for slot, l := range slotLabels {
 		// CounterValue, not GaugeValue: these only ever increase, and
 		// Prometheus needs to know that to handle resets in rate() correctly.
 		ch <- prometheus.MustNewConstMetric(
-			c.desc, prometheus.CounterValue, float64(totals[slot]), name,
+			c.desc, prometheus.CounterValue, float64(totals[slot]), l.family, l.protocol,
 		)
 	}
 }
