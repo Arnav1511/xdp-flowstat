@@ -26,7 +26,7 @@ xdp_flowstat_packets_total{family="non_ip",protocol="other"} 9
 
 ```bash
 make build              # clang -target bpf + bpf2go + go build
-sudo make up            # create an isolated veth pair in its own netns
+make up                 # create an isolated veth pair in its own netns (runs sudo itself)
 sudo ./bin/flowstat -iface veth-fs0 -mode native
 
 # elsewhere
@@ -34,7 +34,7 @@ curl -s localhost:2112/metrics | grep xdp_flowstat
 sudo ip netns exec flowstat ping -c 5 10.200.0.1
 ```
 
-Ctrl-C detaches. `sudo make down` removes the harness.
+Ctrl-C detaches. `make down` removes the harness.
 
 The loader **refuses to attach to the interface carrying the default route**
 (read from `/proc/net/route`) unless you pass `-force`. A faulty XDP program on
@@ -347,7 +347,7 @@ and "reached the application" is itself a useful diagnostic signal.
 
 - Linux kernel with `CONFIG_DEBUG_INFO_BTF=y` (any modern distro kernel)
 - clang 15+ and LLVM (`clang-19 llvm-19 libbpf-dev` on Ubuntu/Mint)
-- Go 1.24+
+- Go 1.25+ (the floor set by cilium/ebpf and client_golang)
 - root to attach (`kernel.unprivileged_bpf_disabled` is 2 on most distros)
 
 `vmlinux.h` and `cmd/flowstat/flowstat_bpfel.{go,o}` are committed, so a fresh
@@ -378,8 +378,8 @@ to `veth-fs1` would show you the opposite direction.
 ```
 
 ```bash
-sudo make up      # create netns + veth pair
-sudo make down    # tear down, detaching any XDP program first
+make up      # create netns + veth pair (the target runs sudo itself)
+make down    # tear down, detaching any XDP program first
 ```
 
 ### Flags
@@ -390,6 +390,29 @@ sudo make down    # tear down, detaching any XDP program first
 | `-mode` | `native` | `native` or `generic` |
 | `-metrics-addr` | `:2112` | listen address for `/metrics` |
 | `-force` | `false` | allow attaching to the default-route interface |
+
+### The full exposition
+
+Nine series, fixed. Values below are from a veth carrying only IPv6 neighbour
+discovery — which Stage 4 counted as `other` until the IPv6 parser separated it
+out.
+
+```
+# HELP xdp_flowstat_packets_total Ingress packets observed by the XDP program, by address family and IP protocol.
+# TYPE xdp_flowstat_packets_total counter
+xdp_flowstat_packets_total{family="ipv4",protocol="icmp"} 0
+xdp_flowstat_packets_total{family="ipv4",protocol="other"} 0
+xdp_flowstat_packets_total{family="ipv4",protocol="tcp"} 0
+xdp_flowstat_packets_total{family="ipv4",protocol="udp"} 0
+xdp_flowstat_packets_total{family="ipv6",protocol="icmp"} 8
+xdp_flowstat_packets_total{family="ipv6",protocol="other"} 0
+xdp_flowstat_packets_total{family="ipv6",protocol="tcp"} 0
+xdp_flowstat_packets_total{family="ipv6",protocol="udp"} 0
+xdp_flowstat_packets_total{family="non_ip",protocol="other"} 0
+```
+
+Go runtime and process collectors are also registered, so `go_*` and
+`process_*` series appear alongside these.
 
 ### Verifying an attach
 
