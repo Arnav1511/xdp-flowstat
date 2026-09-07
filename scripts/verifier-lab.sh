@@ -37,7 +37,17 @@ run() {
 	fi
 	echo "compiled OK -- so this is not a compile-time error"
 	bpftool prog load "$TMP/v.o" /sys/fs/bpf/vlab 2>&1 \
-		| grep -vE "^libbpf: (map|prog) '" | head -40
+		| grep -vE "^libbpf: (map|prog) '" > "$TMP/log"
+
+	# Show where the verifier started reasoning...
+	head -20 "$TMP/log"
+	# ...then always show the verdict, however deep in the log it sits.
+	# Deeper checks push the rejection past any fixed head limit.
+	if [ "$(wc -l < "$TMP/log")" -gt 20 ]; then
+		echo "   [...]"
+		grep -nE "invalid|offset is outside|^processed|R[0-9]+ (min|max) value" "$TMP/log" \
+			| tail -6 | sed 's/^/   /'
+	fi
 	rm -f /sys/fs/bpf/vlab 2>/dev/null
 }
 
