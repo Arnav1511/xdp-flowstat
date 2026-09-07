@@ -41,12 +41,15 @@ run() {
 
 	# Show where the verifier started reasoning...
 	head -20 "$TMP/log"
-	# ...then always show the verdict, however deep in the log it sits.
-	# Deeper checks push the rejection past any fixed head limit.
-	if [ "$(wc -l < "$TMP/log")" -gt 20 ]; then
+	# ...then show the verdict if it fell outside those first 20 lines.
+	# Deeper checks push the rejection past any fixed head limit; shallow
+	# ones do not, and reprinting it there would just duplicate.
+	local errline
+	errline=$(grep -nE "invalid access|invalid mem access" "$TMP/log" | head -1 | cut -d: -f1)
+	if [ -n "$errline" ] && [ "$errline" -gt 20 ]; then
 		echo "   [...]"
-		grep -nE "invalid|offset is outside|^processed|R[0-9]+ (min|max) value" "$TMP/log" \
-			| tail -6 | sed 's/^/   /'
+		grep -E "invalid access|invalid mem access|offset is outside|^processed" "$TMP/log" \
+			| sed 's/^/   /'
 	fi
 	rm -f /sys/fs/bpf/vlab 2>/dev/null
 }
