@@ -16,7 +16,7 @@ printf '  %s\n' "$(printf '─%.0s' {1..92})"
   next
 }
 /invalid access|invalid mem access/ {
-  err = $0; sub(/^ *[0-9]+:/, "", err)
+  err = $0; sub(/^ *[0-9]+:/, "", err); sub(/^ +/, "", err)
   if (name != "" && !(name in seen)) { printf "  %-31s %s\n", name, err; seen[name] = 1 }
 }
 /^ *[0-9]*:?processed/ {
