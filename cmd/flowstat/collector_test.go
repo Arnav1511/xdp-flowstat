@@ -110,3 +110,38 @@ func TestSlotLabelsComplete(t *testing.T) {
 		seen[key] = true
 	}
 }
+
+// TestSlotCountMatchesBPFMap closes the one place C and Go can silently
+// disagree: SLOT_MAX in bpf/xdp_flowstat.c and slotMax here.
+//
+// loadFlowstat() parses the ELF that bpf2go embedded at build time. It makes no
+// bpf() syscall, so this needs no kernel, no root and no attached program --
+// but the map definition it reads is the real compiled one. Add a slot to the C
+// without adding it here (or vice versa) and this fails.
+func TestSlotCountMatchesBPFMap(t *testing.T) {
+	spec, err := loadFlowstat()
+	if err != nil {
+		t.Fatalf("load embedded collection spec: %v", err)
+	}
+
+	m, ok := spec.Maps["proto_count"]
+	if !ok {
+		t.Fatal("compiled object has no map named proto_count")
+	}
+
+	if m.MaxEntries != slotMax {
+		t.Errorf("SLOT_MAX in bpf/xdp_flowstat.c is %d, slotMax in Go is %d -- they must match",
+			m.MaxEntries, slotMax)
+	}
+	if got := len(slotLabels); got != int(m.MaxEntries) {
+		t.Errorf("slotLabels has %d entries, BPF map has %d", got, m.MaxEntries)
+	}
+
+	// The Go side reads each value as a uint64 out of a per-CPU slice.
+	if m.ValueSize != 8 {
+		t.Errorf("map value is %d bytes, Go reads uint64 (8)", m.ValueSize)
+	}
+	if m.KeySize != 4 {
+		t.Errorf("map key is %d bytes, Go writes uint32 (4)", m.KeySize)
+	}
+}

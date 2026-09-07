@@ -1,0 +1,13 @@
+xdp-flowstat
+Copyright 2026 Arnav Ranjan
+
+The userspace loader and exporter (cmd/, scripts/) are licensed under the
+Apache License, Version 2.0. See LICENSE.
+
+The eBPF program under bpf/ is licensed GPL-2.0, marked with an SPDX
+identifier in each source file. This is not incidental: the program declares
+`char _license[] SEC("license") = "GPL"`, and the kernel checks that string
+before permitting the use of GPL-only BPF helpers.
+
+bpf/vmlinux.h is generated from the running kernel's BTF by bpftool and is
+derived from the Linux kernel (GPL-2.0 WITH Linux-syscall-note).

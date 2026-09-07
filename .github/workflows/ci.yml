@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
+
+      # The eBPF object and its Go bindings are committed, so `go build` and
+      # `go test` work without clang. We install it anyway so CI recompiles the
+      # C from source rather than trusting the checked-in artifact.
+      - name: Install clang and libbpf headers
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang-19 llvm-19 libbpf-dev
+          echo "BPF2GO_CC=clang-19"    >> "$GITHUB_ENV"
+          echo "BPF2GO_STRIP=llvm-strip-19" >> "$GITHUB_ENV"
+
+      - name: Compile the eBPF object and regenerate bindings
+        run: go generate ./...
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test -race ./...
+
+      - name: Build
+        run: go build -o bin/flowstat ./cmd/flowstat
+
+      - name: Shellcheck the scripts
+        run: |
+          sudo apt-get install -y --no-install-recommends shellcheck
+          shellcheck -S warning scripts/*.sh
+
+  # The verifier lab needs root and a live kernel, so it cannot run here.
+  # Everything above is reproducible without either.

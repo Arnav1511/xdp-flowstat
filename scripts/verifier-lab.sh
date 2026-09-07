@@ -8,7 +8,7 @@
 # Needs root only for the load step (kernel.unprivileged_bpf_disabled=2).
 #   sudo ./scripts/verifier-lab.sh
 set -uo pipefail
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/.." || exit 1
 
 SRC=bpf/xdp_flowstat.c
 TMP=$(mktemp -d)

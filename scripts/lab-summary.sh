@@ -4,7 +4,7 @@
 #
 #   sudo ./scripts/lab-summary.sh
 set -uo pipefail
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/.." || exit 1
 
 printf '\n  %-31s %s\n' "CHECK DELETED" "WHAT THE VERIFIER SAID"
 printf '  %s\n' "$(printf '─%.0s' {1..92})"

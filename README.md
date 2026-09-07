@@ -1,5 +1,8 @@
 # xdp-flowstat
 
+[![CI](https://github.com/Arnav1511/xdp-flowstat/actions/workflows/ci.yml/badge.svg)](https://github.com/Arnav1511/xdp-flowstat/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+
 An XDP program that counts ingress packets by address family and IP protocol at
 the NIC driver layer, exposes the counters through an eBPF map, and serves them
 as Prometheus metrics.
@@ -67,14 +70,21 @@ NIC DMAs frame into the RX ring
 Consequences:
 
 - **`XDP_DROP` costs a pointer bump.** The page returns straight to the driver's
-  recycle ring; you never paid for the `sk_buff`. This is where the "roughly 10×
-  faster than `iptables -j DROP`" figure comes from.
+  recycle ring; you never paid for the `sk_buff`. That is a structural claim
+  about work skipped, not a throughput measurement — see the note below.
 - **`struct xdp_md` is almost empty** — `data`, `data_end`, `data_meta`,
   `ingress_ifindex`, `rx_queue_index`, `egress_ifindex`. No protocol fields, no
   metadata, because none has been computed yet. That austerity *is* the
   performance story, visible in the type.
 - **`XDP_TX` and `XDP_REDIRECT`** can bounce or forward a packet without the
   stack ever seeing it. Load balancers and DDoS scrubbers live here.
+
+**No throughput numbers are claimed here.** Every measurement in this document
+is of *verifier* behaviour, taken on this machine with the method shown. Packet
+rates depend on NIC, driver, ruleset size and traffic mix; quoting a ratio
+without a rig to back it would be the one unearned number in the file. The
+structural argument — XDP runs before `alloc_skb()`, so a drop skips that
+cost — stands on its own without one.
 
 ### What XDP cannot do that tc BPF can
 
@@ -332,7 +342,11 @@ explicitly rather than discovered.
 | `MAX_EXT_HDRS = 4` | a longer IPv6 extension chain counts as `ipv6`/`other` |
 | ESP / AH not decoded | encrypted payloads count as `ipv6`/`other` |
 | IPv4 options ignored | `ip->protocol` sits at a fixed offset, so `ihl` is not decoded |
-| `SLOT_MAX` defined in both C and Go | can drift silently if a slot is added |
+
+The slot count is defined in both C (`SLOT_MAX`) and Go (`slotMax`). That is
+not on this list, because `TestSlotCountMatchesBPFMap` reads the compiled map
+definition out of the embedded ELF and fails if the two disagree — no kernel or
+root required, since parsing the object makes no `bpf()` syscall.
 
 `XDP_PASS` does not mean *delivered* — it means *handed to the stack*. Between
 this hook and a socket sit `alloc_skb`, tc ingress, netfilter, routing and
@@ -441,9 +455,24 @@ layers** — `xdp_no_bounds_check.c` (verifier: range) and `xdp_wrong_section.c`
 
 ---
 
+## Licensing
+
+Userspace (`cmd/`, `scripts/`) is Apache-2.0. The eBPF program under `bpf/` is
+GPL-2.0, which is not a stylistic choice: it declares
+`char _license[] SEC("license") = "GPL"`, and the kernel checks that string
+before allowing GPL-only BPF helpers. See [NOTICE](NOTICE).
+
 ## Roadmap
 
 - **Stage 2** ✅ attach and detach cleanly
 - **Stage 3** ✅ per-protocol counters in a `BPF_MAP_TYPE_PERCPU_ARRAY`
 - **Stage 4** ✅ Prometheus exporter
 - **Stage 5** ✅ VLAN and IPv6 parsing
+- **Stage 6** — per-source-address counters via `BPF_MAP_TYPE_LRU_HASH` with a
+  top-N read in userspace. The interesting constraint is that this *cannot* be a
+  Prometheus label: unbounded cardinality is how eBPF observability projects melt
+  a Prometheus server. The map has to do the bounding, not the exporter.
+- **Stage 7** — measure it. Everything here quantifies verifier behaviour; none
+  of it quantifies throughput. A `pktgen` or `trafgen` rig comparing `XDP_DROP`
+  against `iptables -j DROP` at varying ruleset sizes would let this repo make a
+  performance claim it has actually earned.
