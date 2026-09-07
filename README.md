@@ -428,10 +428,8 @@ machine code. The BPF link is refcounted against the loader process, so even
 ### The verifier lab
 
 ```bash
-sudo ./scripts/verifier-lab.sh
-
-# just the verdicts
-sudo ./scripts/verifier-lab.sh 2>&1 | grep -E "══|invalid|offset is outside|processed"
+make lab            # full logs: every register state, every rejection
+make lab-summary    # one screen: each check deleted, and what the kernel said
 ```
 
 Line numbers are derived from the source at runtime, so the lab does not rot

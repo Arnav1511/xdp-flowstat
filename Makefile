@@ -1,4 +1,4 @@
-.PHONY: vmlinux generate build test clean up down
+.PHONY: vmlinux generate build test clean up down lab lab-summary
 
 BPFTOOL ?= bpftool
 
@@ -22,6 +22,12 @@ build: generate
 
 test:
 	go test ./...
+
+lab:
+	sudo ./scripts/verifier-lab.sh
+
+lab-summary:
+	sudo ./scripts/lab-summary.sh
 
 up:
 	sudo ./scripts/veth-up.sh
